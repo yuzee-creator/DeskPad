@@ -60,7 +60,7 @@ class DesktopWebView(context: Context) : WebView(context) {
                 val major = Regex("Chrome/(\\d+)").find(settings.userAgentString ?: "")
                     ?.groupValues?.get(1) ?: "130"
                 WebViewCompat.addDocumentStartJavaScript(
-                    this, STEALTH_JS.replace("__V__", major), setOf("*")
+                    this, STEALTH_JS.replace("__V__", major), setOf("https://*.google.com", "https://google.com", "https://*.youtube.com")
                 )
             }
         } catch (e: Throwable) {

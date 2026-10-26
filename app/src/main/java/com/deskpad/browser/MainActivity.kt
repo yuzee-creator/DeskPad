@@ -71,7 +71,7 @@ class MainActivity : Activity() {
     companion object {
         const val HOME = "https://www.google.com"
         const val REQ_FILE = 1001
-        val RESOLUTIONS = arrayOf(1024 to 576, 1280 to 720, 1600 to 900, 1920 to 1080)
+        val RESOLUTIONS = arrayOf(480 to 270, 640 to 360, 800 to 450, 960 to 540, 1024 to 576, 1280 to 720, 1600 to 900, 1920 to 1080)
     }
 
     private lateinit var prefs: SharedPreferences
@@ -256,7 +256,7 @@ class MainActivity : Activity() {
             layoutParams = lp(MATCH, WRAP).apply { topMargin = dpi(3f) }
             touchEnabled = prefs.getBoolean("touch", false)
         }
-        val res = RESOLUTIONS[prefs.getInt("res", 1).coerceIn(0, RESOLUTIONS.size - 1)]
+        val res = RESOLUTIONS[prefs.getInt("res2", 4).coerceIn(0, RESOLUTIONS.size - 1)]
         screen.setVirtualSize(res.first, res.second)
         bezel.addView(screen)
 
@@ -718,7 +718,7 @@ class MainActivity : Activity() {
             .setItems(labels.toTypedArray()) { _, which ->
                 val r = RESOLUTIONS[which]
                 screen.setVirtualSize(r.first, r.second)
-                prefs.edit().putInt("res", which).apply()
+                prefs.edit().putInt("res2", which).apply()
                 updateResLabel()
             }
             .show()
