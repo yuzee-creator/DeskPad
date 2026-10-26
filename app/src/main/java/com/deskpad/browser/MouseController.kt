@@ -164,7 +164,6 @@ class MouseController(
             metaState(), buttons, 1f, 1f, 0, 0,
             InputDevice.SOURCE_MOUSE, 0
         )
-        if (actionButton != 0) ev.actionButton = actionButton
         try {
             if (isTouchPath) wv.dispatchTouchEvent(ev) else wv.dispatchGenericMotionEvent(ev)
         } finally {
