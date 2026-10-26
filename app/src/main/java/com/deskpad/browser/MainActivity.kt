@@ -36,10 +36,12 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import java.io.ByteArrayInputStream
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -73,7 +75,16 @@ class MainActivity : Activity() {
         const val HOME = "https://www.google.com"
         const val REQ_FILE = 1001
         val ZOOMS = floatArrayOf(1f, 1.5f, 2f, 3f)
-        val RESOLUTIONS = arrayOf(480 to 270, 640 to 360, 800 to 450, 960 to 540, 1024 to 576, 1280 to 720, 1600 to 900, 1920 to 1080)
+        val RESOLUTIONS = arrayOf(256 to 144, 320 to 180, 400 to 225, 480 to 270, 640 to 360, 800 to 450, 960 to 540, 1024 to 576, 1280 to 720, 1600 to 900, 1920 to 1080)
+
+        /** Domain iklan dan pelacak yang diblokir (hanya untuk sub-permintaan, bukan halaman utama). */
+        val AD_HOSTS = arrayOf(
+            "doubleclick.net", "googlesyndication.com", "googleadservices.com", "googletagservices.com",
+            "adservice.google.com", "google-analytics.com", "adnxs.com", "taboola.com", "outbrain.com",
+            "criteo.com", "criteo.net", "scorecardresearch.com", "quantserve.com", "moatads.com",
+            "adsrvr.org", "rubiconproject.com", "pubmatic.com", "openx.net", "amazon-adsystem.com",
+            "hotjar.com", "mgid.com", "popads.net", "propellerads.com", "adcolony.com", "smaato.net"
+        )
     }
 
     private lateinit var prefs: SharedPreferences
@@ -100,6 +111,7 @@ class MainActivity : Activity() {
     private var current = -1
     private var cursorReady = false
     private var imeAllowed = false
+    @Volatile private var blockAds = true
     private var fileCallback: ValueCallback<Array<Uri>>? = null
 
     private val desktopUa: String by lazy {
@@ -117,6 +129,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         prefs = getSharedPreferences("deskpad", MODE_PRIVATE)
+        blockAds = prefs.getBoolean("blockAds", true)
         buildUi()
         setOrientationMode(prefs.getBoolean("land", false))
 
@@ -273,7 +286,7 @@ class MainActivity : Activity() {
             layoutParams = lp(MATCH, WRAP).apply { topMargin = dpi(3f) }
             touchEnabled = prefs.getBoolean("touch", false)
         }
-        val res = RESOLUTIONS[prefs.getInt("res2", 4).coerceIn(0, RESOLUTIONS.size - 1)]
+        val res = savedResolution()
         screen.setVirtualSize(res.first, res.second)
         screen.setZoom(ZOOMS[prefs.getInt("zoom", 0).coerceIn(0, ZOOMS.size - 1)])
         bezel.addView(screen)
@@ -435,6 +448,39 @@ class MainActivity : Activity() {
         currentWebView()?.requestFocus()
     }
 
+    private fun savedResolution(): Pair<Int, Int> {
+        val oldWidths = intArrayOf(480, 640, 800, 960, 1024, 1280, 1600, 1920)
+        val fallbackW = oldWidths[prefs.getInt("res2", 4).coerceIn(0, oldWidths.size - 1)]
+        val w = prefs.getInt("resW", fallbackW)
+        return RESOLUTIONS.firstOrNull { it.first == w } ?: (1024 to 576)
+    }
+
+    private fun isAdHost(host: String?): Boolean {
+        if (host == null) return false
+        val h = host.lowercase()
+        return AD_HOSTS.any { h == it || h.endsWith("." + it) }
+    }
+
+    private fun toggleImages() {
+        val on = !prefs.getBoolean("images", true)
+        prefs.edit().putBoolean("images", on).apply()
+        tabs.forEach { it.webView.settings.blockNetworkImage = !on }
+        toast(if (on) "Gambar dimuat lagi. Muat ulang halaman." else "Gambar dimatikan, halaman lebih ringan. Muat ulang halaman.")
+    }
+
+    private fun toggleAds() {
+        blockAds = !blockAds
+        prefs.edit().putBoolean("blockAds", blockAds).apply()
+        toast(if (blockAds) "Iklan dan pelacak diblokir" else "Blokir iklan dimatikan")
+    }
+
+    private fun toggleAutoplay() {
+        val on = !prefs.getBoolean("autoplay", true)
+        prefs.edit().putBoolean("autoplay", on).apply()
+        tabs.forEach { it.webView.settings.mediaPlaybackRequiresUserGesture = !on }
+        toast(if (on) "Video langsung diputar otomatis" else "Video tidak diputar otomatis, lebih ringan")
+    }
+
     private fun updateResLabel() {
         resLabel.text = "${screen.cssW}×${screen.cssH}"
     }
@@ -560,13 +606,14 @@ class MainActivity : Activity() {
         s.setSupportZoom(false)
         s.builtInZoomControls = false
         s.displayZoomControls = false
-        s.mediaPlaybackRequiresUserGesture = false
+        s.mediaPlaybackRequiresUserGesture = !prefs.getBoolean("autoplay", true)
         s.javaScriptCanOpenWindowsAutomatically = true
         s.setSupportMultipleWindows(true)
         s.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         s.userAgentString = desktopUa
         s.allowFileAccess = false
         s.textZoom = 100
+        s.blockNetworkImage = !prefs.getBoolean("images", true)
 
         wv.setBackgroundColor(Color.WHITE)
         wv.isFocusable = true
@@ -604,6 +651,13 @@ class MainActivity : Activity() {
             "<p><code>${TextUtils.htmlEncode(url)}</code></p></body></html>"
 
     private fun makeClient() = object : WebViewClient() {
+
+        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+            if (blockAds && !request.isForMainFrame && isAdHost(request.url.host)) {
+                return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+            }
+            return super.shouldInterceptRequest(view, request)
+        }
 
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val u = request.url
@@ -762,6 +816,9 @@ class MainActivity : Activity() {
             "Kecepatan scroll: ${mouse.scrollIndex + 1}/${MouseController.SCROLL_GAINS.size}",
             "Sentuh layar langsung: ${if (screen.touchEnabled) "AKTIF" else "MATI"}",
             "Keyboard sistem HP: ${if (imeAllowed) "AKTIF" else "MATI"}",
+            "Gambar: ${if (prefs.getBoolean("images", true)) "AKTIF" else "MATI (ringan)"}",
+            "Blokir iklan & pelacak: ${if (blockAds) "AKTIF" else "MATI"}",
+            "Autoplay video: ${if (prefs.getBoolean("autoplay", true)) "AKTIF" else "MATI (ringan)"}",
             "Hapus cookie & cache",
             "Tentang"
         )
@@ -797,21 +854,31 @@ class MainActivity : Activity() {
                         tabs.forEach { it.webView.allowIme = imeAllowed }
                         toast(if (imeAllowed) "Ketuk kolom teks di halaman untuk memunculkan keyboard HP" else "Keyboard HP dimatikan")
                     }
-                    12 -> clearData()
-                    13 -> showAbout()
+                    12 -> toggleImages()
+                    13 -> toggleAds()
+                    14 -> toggleAutoplay()
+                    15 -> clearData()
+                    16 -> showAbout()
                 }
             }
             .show()
     }
 
     private fun showResolutionDialog() {
-        val labels = RESOLUTIONS.map { "${it.first} × ${it.second}" + if (it.first >= 1920) "  (berat)" else "" }
+        val labels = RESOLUTIONS.map {
+            "${it.first} × ${it.second}" + when {
+                it.first >= 1920 -> "  (berat)"
+                it.first <= 400 -> "  (sangat ringan, burik)"
+                it.first <= 480 -> "  (ringan)"
+                else -> ""
+            }
+        }
         AlertDialog.Builder(this)
             .setTitle("Resolusi layar virtual")
             .setItems(labels.toTypedArray()) { _, which ->
                 val r = RESOLUTIONS[which]
                 screen.setVirtualSize(r.first, r.second)
-                prefs.edit().putInt("res2", which).apply()
+                prefs.edit().putInt("resW", r.first).apply()
                 updateResLabel()
             }
             .show()
