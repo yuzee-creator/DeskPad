@@ -8,6 +8,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -71,6 +72,7 @@ class MainActivity : Activity() {
     companion object {
         const val HOME = "https://www.google.com"
         const val REQ_FILE = 1001
+        val ZOOMS = floatArrayOf(1f, 1.5f, 2f, 3f)
         val RESOLUTIONS = arrayOf(480 to 270, 640 to 360, 800 to 450, 960 to 540, 1024 to 576, 1280 to 720, 1600 to 900, 1920 to 1080)
     }
 
@@ -88,6 +90,11 @@ class MainActivity : Activity() {
     private lateinit var modeKeyboard: TextView
     private lateinit var modeMouse: TextView
     private lateinit var resLabel: TextView
+    private lateinit var outerView: FrameLayout
+    private lateinit var rootLayout: LinearLayout
+    private lateinit var bezelLayout: LinearLayout
+    private lateinit var controlsColumn: LinearLayout
+    private var lastLayoutKey = ""
 
     private val tabs = mutableListOf<BrowserTab>()
     private var current = -1
@@ -111,9 +118,15 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         prefs = getSharedPreferences("deskpad", MODE_PRIVATE)
         buildUi()
+        setOrientationMode(prefs.getBoolean("land", false))
 
         val startUrl = intent?.data?.toString() ?: HOME
         createTab(startUrl)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && prefs.getBoolean("land", false)) applySystemUi(true)
     }
 
     override fun onResume() {
@@ -187,6 +200,8 @@ class MainActivity : Activity() {
             isFocusableInTouchMode = true
         }
         outer.addView(root, FrameLayout.LayoutParams(MATCH, MATCH))
+        outerView = outer
+        rootLayout = root
 
         // ---- Bezel (bingkai layar) ----
         val bezel = LinearLayout(this).apply {
@@ -194,6 +209,8 @@ class MainActivity : Activity() {
             background = rounded(Pal.bezel, dpf(16f))
             setPadding(dpi(10f), dpi(8f), dpi(10f), dpi(8f))
         }
+
+        bezelLayout = bezel
 
         // Toolbar browser
         val toolbar = LinearLayout(this).apply {
@@ -258,6 +275,7 @@ class MainActivity : Activity() {
         }
         val res = RESOLUTIONS[prefs.getInt("res2", 4).coerceIn(0, RESOLUTIONS.size - 1)]
         screen.setVirtualSize(res.first, res.second)
+        screen.setZoom(ZOOMS[prefs.getInt("zoom", 0).coerceIn(0, ZOOMS.size - 1)])
         bezel.addView(screen)
 
         // Label bawah layar
@@ -309,15 +327,86 @@ class MainActivity : Activity() {
         modeMouse = modeButton("MOUSE").apply { setOnClickListener { showMode(false) } }
         modeRow.addView(modeKeyboard)
         modeRow.addView(modeMouse)
-        root.addView(modeRow, lp(MATCH, dpi(40f)).apply { topMargin = dpi(8f) })
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        controlsColumn = column
+        column.addView(modeRow, lp(MATCH, dpi(40f)).apply { topMargin = dpi(8f) })
 
         val controls = FrameLayout(this)
         controls.addView(keyboard, FrameLayout.LayoutParams(MATCH, MATCH))
         controls.addView(mousePanel, FrameLayout.LayoutParams(MATCH, MATCH))
-        root.addView(controls, lp(MATCH, 0, 1f).apply { topMargin = dpi(6f) })
+        column.addView(controls, lp(MATCH, 0, 1f).apply { topMargin = dpi(6f) })
+        root.addView(column, lp(MATCH, 0, 1f))
+
+        outer.addOnLayoutChangeListener { _, l, t, r, b, _, _, _, _ ->
+            applyOrientationLayout(r - l, b - t)
+        }
 
         showMode(prefs.getBoolean("modeKeyboard", false))
         setContentView(outer)
+    }
+
+    /** Portrait: layar di atas, kontrol di bawah. Landscape: layar di kiri (sebesar mungkin), kontrol di kanan. */
+    private fun applyOrientationLayout(w: Int, h: Int) {
+        if (w <= 0 || h <= 0) return
+        val land = w > h
+        val key = "$land:$w:$h:${screen.cssW}:${screen.cssH}"
+        if (key == lastLayoutKey) return
+        lastLayoutKey = key
+        if (land) {
+            val availH = h - dpi(16f)
+            val screenH = (availH - dpi(75f)).coerceAtLeast(dpi(120f))
+            val wantW = (screenH * screen.cssW.toFloat() / screen.cssH.toFloat()).toInt() + dpi(20f)
+            val bezelW = wantW.coerceAtMost((w * 0.68f).toInt())
+            outerView.post {
+                rootLayout.orientation = LinearLayout.HORIZONTAL
+                bezelLayout.layoutParams = lp(bezelW, WRAP).apply { gravity = Gravity.CENTER_VERTICAL }
+                controlsColumn.layoutParams = lp(0, MATCH, 1f).apply { leftMargin = dpi(8f) }
+            }
+        } else {
+            outerView.post {
+                rootLayout.orientation = LinearLayout.VERTICAL
+                bezelLayout.layoutParams = lp(MATCH, WRAP)
+                controlsColumn.layoutParams = lp(MATCH, 0, 1f)
+            }
+        }
+    }
+
+    private fun setOrientationMode(land: Boolean) {
+        requestedOrientation = if (land) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+        applySystemUi(land)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun applySystemUi(land: Boolean) {
+        window.decorView.systemUiVisibility = if (land) {
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_FULLSCREEN
+        } else {
+            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        }
+    }
+
+    private fun toggleLandscape() {
+        val land = !prefs.getBoolean("land", false)
+        prefs.edit().putBoolean("land", land).apply()
+        setOrientationMode(land)
+    }
+
+    private fun showZoomDialog() {
+        val labels = ZOOMS.map { "${(it * 100).toInt()}%" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Zoom layar")
+            .setItems(labels) { _, which ->
+                screen.setZoom(ZOOMS[which])
+                prefs.edit().putInt("zoom", which).apply()
+                toast("Zoom ${labels[which]}. Dorong kursor ke tepi layar untuk menggeser tampilan.")
+            }
+            .show()
     }
 
     private fun modeButton(label: String): TextView = TextView(this).apply {
@@ -667,6 +756,8 @@ class MainActivity : Activity() {
             "⌂  Beranda",
             "⌨  Ketik / tempel teks…",
             "Resolusi layar: ${screen.cssW}×${screen.cssH}",
+            "Zoom layar: ${(screen.zoom * 100).toInt()}%",
+            "Mode landscape: ${if (prefs.getBoolean("land", false)) "AKTIF" else "MATI"}",
             "Kecepatan kursor: ${mouse.gainIndex + 1}/${MouseController.GAINS.size}",
             "Kecepatan scroll: ${mouse.scrollIndex + 1}/${MouseController.SCROLL_GAINS.size}",
             "Sentuh layar langsung: ${if (screen.touchEnabled) "AKTIF" else "MATI"}",
@@ -683,29 +774,31 @@ class MainActivity : Activity() {
                     3 -> currentWebView()?.loadUrl(HOME)
                     4 -> showTypeDialog()
                     5 -> showResolutionDialog()
-                    6 -> {
+                    6 -> showZoomDialog()
+                    7 -> toggleLandscape()
+                    8 -> {
                         mouse.gainIndex = (mouse.gainIndex + 1) % MouseController.GAINS.size
                         prefs.edit().putInt("gain", mouse.gainIndex).apply()
                         mousePanel.updateSpeedLabel()
                         toast("Kecepatan kursor ${mouse.gainIndex + 1}/${MouseController.GAINS.size}")
                     }
-                    7 -> {
+                    9 -> {
                         mouse.scrollIndex = (mouse.scrollIndex + 1) % MouseController.SCROLL_GAINS.size
                         prefs.edit().putInt("scroll", mouse.scrollIndex).apply()
                         toast("Kecepatan scroll ${mouse.scrollIndex + 1}/${MouseController.SCROLL_GAINS.size}")
                     }
-                    8 -> {
+                    10 -> {
                         screen.touchEnabled = !screen.touchEnabled
                         prefs.edit().putBoolean("touch", screen.touchEnabled).apply()
                         toast(if (screen.touchEnabled) "Layar bisa disentuh langsung" else "Layar hanya dikontrol lewat mouse/keyboard")
                     }
-                    9 -> {
+                    11 -> {
                         imeAllowed = !imeAllowed
                         tabs.forEach { it.webView.allowIme = imeAllowed }
                         toast(if (imeAllowed) "Ketuk kolom teks di halaman untuk memunculkan keyboard HP" else "Keyboard HP dimatikan")
                     }
-                    10 -> clearData()
-                    11 -> showAbout()
+                    12 -> clearData()
+                    13 -> showAbout()
                 }
             }
             .show()

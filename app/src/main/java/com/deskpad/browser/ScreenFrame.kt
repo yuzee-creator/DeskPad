@@ -35,8 +35,18 @@ class ScreenFrame(context: Context) : FrameLayout(context) {
 
     val cursor = CursorView(context)
 
-    /** Skala dari piksel WebView -> piksel layar (container). */
+    /** Skala dari piksel WebView -> piksel layar (container), sudah termasuk zoom. */
     var scaleFactor = 1f
+        private set
+
+    /** Zoom digital layar: 1 = pas layar. Tata letak halaman tetap 1280x720 (desktop). */
+    var zoom = 1f
+        private set
+
+    /** Pergeseran tampilan (piksel layar) saat zoom > 1. */
+    var panX = 0f
+        private set
+    var panY = 0f
         private set
 
     /** Jika true, sentuhan langsung ke layar diteruskan ke halaman (mode layar sentuh). */
@@ -74,10 +84,55 @@ class ScreenFrame(context: Context) : FrameLayout(context) {
 
     private fun updateScale() {
         if (width <= 0) return
-        scaleFactor = width / virtualPxWidth()
+        scaleFactor = width / virtualPxWidth() * zoom
         host.scaleX = scaleFactor
         host.scaleY = scaleFactor
+        clampPan()
+        applyPan()
         cursor.invalidate()
+    }
+
+    private fun clampPan() {
+        val maxX = (width * (zoom - 1f)).coerceAtLeast(0f)
+        val maxY = (height * (zoom - 1f)).coerceAtLeast(0f)
+        panX = panX.coerceIn(0f, maxX)
+        panY = panY.coerceIn(0f, maxY)
+    }
+
+    private fun applyPan() {
+        host.translationX = -panX
+        host.translationY = -panY
+    }
+
+    /** Koordinat layar (piksel container) -> koordinat WebView. */
+    fun webX(sx: Float): Float = (sx + panX) / (if (scaleFactor > 0f) scaleFactor else 1f)
+
+    fun webY(sy: Float): Float = (sy + panY) / (if (scaleFactor > 0f) scaleFactor else 1f)
+
+    /** Geser tampilan (dipakai saat kursor mendorong tepi layar dalam keadaan zoom). */
+    fun panBy(dx: Float, dy: Float) {
+        if (zoom <= 1f) return
+        panX += dx
+        panY += dy
+        clampPan()
+        applyPan()
+    }
+
+    /** Ubah zoom; titik halaman di bawah kursor dipertahankan. */
+    fun setZoom(z: Float) {
+        val nz = z.coerceIn(1f, 4f)
+        if (nz == zoom) return
+        val ok = width > 0 && scaleFactor > 0f
+        val wx = if (ok) (cursor.curX + panX) / scaleFactor else 0f
+        val wy = if (ok) (cursor.curY + panY) / scaleFactor else 0f
+        zoom = nz
+        updateScale()
+        if (ok && width > 0) {
+            panX = wx * scaleFactor - cursor.curX
+            panY = wy * scaleFactor - cursor.curY
+            clampPan()
+            applyPan()
+        }
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {

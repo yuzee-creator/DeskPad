@@ -11,15 +11,28 @@ android {
         applicationId = "com.deskpad.browser"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // Nomor versi naik otomatis tiap build di GitHub supaya APK baru bisa menimpa yang lama.
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionName = "1.1"
+    }
+
+    // Kunci tanda tangan tetap: update menimpa aplikasi lama tanpa uninstall, login tetap aman.
+    signingConfigs {
+        create("deskpad") {
+            storeFile = file("deskpad.keystore")
+            storePassword = "deskpad123"
+            keyAlias = "deskpad"
+            keyPassword = "deskpad123"
+        }
     }
 
     buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("deskpad")
+        }
         release {
             isMinifyEnabled = false
-            // Ditandatangani dengan kunci debug supaya APK release langsung bisa dipasang.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("deskpad")
         }
     }
 
