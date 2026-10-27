@@ -14,18 +14,21 @@ summary{cursor:pointer;font-weight:600}
 label{display:block;color:var(--mut);font-size:13px;margin:10px 0 4px}
 input,textarea{width:100%;background:var(--bg);color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit}
 textarea{min-height:110px;resize:vertical}
-pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;max-height:260px;overflow:auto;font-size:12px}
+#manual{min-height:180px;font:12px/1.4 monospace}
 button{background:var(--ac);color:#1b1305;border:0;border-radius:8px;padding:11px 16px;font-weight:700;font-size:15px;margin:8px 8px 0 0}
 button.sec{background:transparent;color:var(--tx);border:1px solid var(--line)}
 button:disabled{opacity:.5}
-#log{color:var(--mut);font-size:13px;min-height:20px}
+#log{color:var(--mut);font-size:13px;min-height:20px;word-break:break-word}
 #log.ok{color:var(--ok)}#log.er{color:var(--er)}
 video{width:100%;border-radius:8px;margin-top:10px;background:#000}
 a{color:var(--ac)}
+small{color:var(--mut)}
 </style>
 </head>
 <body>
 <h1>Remotion Studio</h1>
+
+<div class="box"><div id="log">Siap.</div></div>
 
 <details id="cfg">
 <summary>Pengaturan</summary>
@@ -35,7 +38,7 @@ a{color:var(--ac)}
 <input id="repo" placeholder="username/Remotion">
 <label>Branch</label>
 <input id="branch" value="main">
-<label>Anthropic API key</label>
+<label>Anthropic API key (opsional, berbayar)</label>
 <input id="anKey" type="password" autocomplete="off">
 <label>Model</label>
 <input id="model" value="claude-sonnet-5-5">
@@ -43,16 +46,19 @@ a{color:var(--ac)}
 </details>
 
 <div class="box">
-<label>Instruksi video</label>
-<textarea id="prompt" placeholder="Contoh: intro 6 detik, teks 'Halo Dunia' muncul per huruf, latar gradasi gelap, 1280x720"></textarea>
-<button id="bGen" onclick="gen()">1. Buat kode</button>
-<button id="bRen" class="sec" onclick="render()" disabled>2. Render</button>
-<div id="log"></div>
+<b>Kode komposisi</b><br>
+<small>Tempel isi Comp.tsx dari Claude, lalu Render.</small>
+<textarea id="manual" placeholder="Tempel kode di sini"></textarea>
+<button class="sec" onclick="pasteClip()">Tempel dari clipboard</button>
+<button class="sec" onclick="$('manual').value='';log('Kolom dikosongkan')">Kosongkan</button>
+<button id="bRen" onclick="render()">Render</button>
 </div>
 
-<div class="box" id="codeBox" style="display:none">
-<b>Kode komposisi</b>
-<pre id="code"></pre>
+<div class="box">
+<b>Minta Claude lewat API</b> <small>(opsional, berbayar)</small>
+<label>Instruksi video</label>
+<textarea id="prompt" placeholder="Contoh: intro 6 detik, teks 'Halo Dunia' muncul per huruf, latar gradasi gelap, 1280x720"></textarea>
+<button id="bGen" class="sec" onclick="gen()">Buat kode</button>
 </div>
 
 <div class="box" id="outBox" style="display:none">
@@ -77,11 +83,18 @@ function loadCfg(){try{const c=JSON.parse(localStorage.getItem('rm_cfg')||'{}');
 function log(t,c){const l=$('log');l.textContent=t;l.className=c||''}
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const gh=(c,p,o={})=>fetch('https://api.github.com/repos/'+c.r+p,{...o,headers:{Authorization:'Bearer '+c.t,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28',...(o.headers||{})}});
-let CODE='';
+
+function getCode(){return $('manual').value.trim().replace(/^```[a-z]*\n?/i,'').replace(/```\s*$/,'').trim()}
+
+async function pasteClip(){
+  try{const t=await navigator.clipboard.readText();if(!t)throw 0;$('manual').value=t;log('Kode ditempel','ok')}
+  catch(e){log('Clipboard diblokir. Tahan kolom kode lalu pilih Tempel.','er')}
+}
 
 async function gen(){
   const c=cfg();const p=$('prompt').value.trim();
-  if(!c.k||!p){log('Isi API key dan instruksi dulu','er');return}
+  if(!c.k){log('API key kosong. Pakai kolom Tempel kode saja.','er');return}
+  if(!p){log('Isi instruksi dulu','er');return}
   $('bGen').disabled=true;log('Claude lagi nulis kode...');
   try{
     const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':c.k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:c.m,max_tokens:8000,system:SYS,messages:[{role:'user',content:p}]})});
@@ -89,15 +102,15 @@ async function gen(){
     if(!r.ok)throw new Error(d.error&&d.error.message||r.status);
     let t=d.content.filter(x=>x.type==='text').map(x=>x.text).join('');
     t=t.replace(/^```[a-z]*\n?/i,'').replace(/```\s*$/,'').trim();
-    if(!/export const meta/.test(t)||!/export default/.test(t))throw new Error('Kode tidak valid (meta/default hilang). Coba lagi.');
-    CODE=t;$('code').textContent=t;$('codeBox').style.display='block';$('bRen').disabled=false;log('Kode siap. Lanjut render.','ok');
+    $('manual').value=t;log('Kode masuk ke kolom. Tap Render.','ok');
   }catch(e){log('Gagal: '+e.message,'er')}
   $('bGen').disabled=false;
 }
 
 async function render(){
-  const c=cfg();
-  if(!c.t||!c.r||!CODE){log('Token GitHub, repo, dan kode wajib ada','er');return}
+  const c=cfg();const CODE=getCode();
+  if(!c.t||!c.r){log('Isi token GitHub dan repo di Pengaturan','er');return}
+  if(!/export const meta/.test(CODE)||!/export default/.test(CODE)){log('Kode tidak valid: harus ada "export const meta" dan "export default"','er');return}
   $('bRen').disabled=true;$('outBox').style.display='none';
   const id=Date.now().toString(36);
   try{
