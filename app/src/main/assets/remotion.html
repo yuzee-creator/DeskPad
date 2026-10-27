@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remotion Studio</title>
+<style>
+:root{--bg:#16181d;--card:#20232a;--line:#323742;--tx:#eceef2;--mut:#9aa1ae;--ac:#ffb454;--ok:#6fd08c;--er:#ff7a7a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,sans-serif;padding:14px;max-width:720px;margin:auto}
+h1{font-size:20px;margin:4px 0 12px}
+details,.box{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+summary{cursor:pointer;font-weight:600}
+label{display:block;color:var(--mut);font-size:13px;margin:10px 0 4px}
+input,textarea{width:100%;background:var(--bg);color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit}
+textarea{min-height:110px;resize:vertical}
+pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;max-height:260px;overflow:auto;font-size:12px}
+button{background:var(--ac);color:#1b1305;border:0;border-radius:8px;padding:11px 16px;font-weight:700;font-size:15px;margin:8px 8px 0 0}
+button.sec{background:transparent;color:var(--tx);border:1px solid var(--line)}
+button:disabled{opacity:.5}
+#log{color:var(--mut);font-size:13px;min-height:20px}
+#log.ok{color:var(--ok)}#log.er{color:var(--er)}
+video{width:100%;border-radius:8px;margin-top:10px;background:#000}
+a{color:var(--ac)}
+</style>
+</head>
+<body>
+<h1>Remotion Studio</h1>
+
+<details id="cfg">
+<summary>Pengaturan</summary>
+<label>GitHub token (akses Contents + Actions)</label>
+<input id="ghTok" type="password" autocomplete="off">
+<label>Repo (pemilik/nama)</label>
+<input id="repo" placeholder="username/Remotion">
+<label>Branch</label>
+<input id="branch" value="main">
+<label>Anthropic API key</label>
+<input id="anKey" type="password" autocomplete="off">
+<label>Model</label>
+<input id="model" value="claude-sonnet-5-5">
+<button class="sec" onclick="saveCfg()">Simpan</button>
+</details>
+
+<div class="box">
+<label>Instruksi video</label>
+<textarea id="prompt" placeholder="Contoh: intro 6 detik, teks 'Halo Dunia' muncul per huruf, latar gradasi gelap, 1280x720"></textarea>
+<button id="bGen" onclick="gen()">1. Buat kode</button>
+<button id="bRen" class="sec" onclick="render()" disabled>2. Render</button>
+<div id="log"></div>
+</div>
+
+<div class="box" id="codeBox" style="display:none">
+<b>Kode komposisi</b>
+<pre id="code"></pre>
+</div>
+
+<div class="box" id="outBox" style="display:none">
+<b>Hasil</b>
+<video id="vid" controls playsinline></video>
+<div id="lnk"></div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const SYS=`Kamu menulis satu file Remotion 4 (React + TypeScript) bernama Comp.tsx.
+Aturan:
+- Keluarkan HANYA kode file, tanpa penjelasan dan tanpa pagar markdown.
+- Wajib: export const meta = {fps, width, height, durationInFrames}; dan export default komponen React.
+- Hanya import dari 'react' dan 'remotion'. Tanpa aset eksternal, tanpa gambar/audio/font dari URL, tanpa paket lain.
+- Semua animasi dihitung dari useCurrentFrame()/interpolate()/spring(). Dilarang CSS transition, setTimeout, Math.random tanpa seed.
+- Default 1280x720, 30 fps, kecuali diminta lain.`;
+
+function cfg(){return{t:$('ghTok').value.trim(),r:$('repo').value.trim(),b:$('branch').value.trim()||'main',k:$('anKey').value.trim(),m:$('model').value.trim()}}
+function saveCfg(){try{localStorage.setItem('rm_cfg',JSON.stringify(cfg()));log('Tersimpan','ok')}catch(e){log('Gagal simpan: '+e.message,'er')}}
+function loadCfg(){try{const c=JSON.parse(localStorage.getItem('rm_cfg')||'{}');$('ghTok').value=c.t||'';$('repo').value=c.r||'';$('branch').value=c.b||'main';$('anKey').value=c.k||'';$('model').value=c.m||'claude-sonnet-5-5'}catch(e){}}
+function log(t,c){const l=$('log');l.textContent=t;l.className=c||''}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const gh=(c,p,o={})=>fetch('https://api.github.com/repos/'+c.r+p,{...o,headers:{Authorization:'Bearer '+c.t,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28',...(o.headers||{})}});
+let CODE='';
+
+async function gen(){
+  const c=cfg();const p=$('prompt').value.trim();
+  if(!c.k||!p){log('Isi API key dan instruksi dulu','er');return}
+  $('bGen').disabled=true;log('Claude lagi nulis kode...');
+  try{
+    const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':c.k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:c.m,max_tokens:8000,system:SYS,messages:[{role:'user',content:p}]})});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error&&d.error.message||r.status);
+    let t=d.content.filter(x=>x.type==='text').map(x=>x.text).join('');
+    t=t.replace(/^```[a-z]*\n?/i,'').replace(/```\s*$/,'').trim();
+    if(!/export const meta/.test(t)||!/export default/.test(t))throw new Error('Kode tidak valid (meta/default hilang). Coba lagi.');
+    CODE=t;$('code').textContent=t;$('codeBox').style.display='block';$('bRen').disabled=false;log('Kode siap. Lanjut render.','ok');
+  }catch(e){log('Gagal: '+e.message,'er')}
+  $('bGen').disabled=false;
+}
+
+async function render(){
+  const c=cfg();
+  if(!c.t||!c.r||!CODE){log('Token GitHub, repo, dan kode wajib ada','er');return}
+  $('bRen').disabled=true;$('outBox').style.display='none';
+  const id=Date.now().toString(36);
+  try{
+    log('Kirim kode ke repo...');
+    const path='/contents/remotion/src/Comp.tsx';
+    let sha;const g=await gh(c,path+'?ref='+encodeURIComponent(c.b));
+    if(g.ok)sha=(await g.json()).sha;
+    const put=await gh(c,path,{method:'PUT',body:JSON.stringify({message:'remotion: komposisi '+id,content:btoa(unescape(encodeURIComponent(CODE))),branch:c.b,sha})});
+    if(!put.ok)throw new Error('Commit gagal: '+(await put.text()).slice(0,160));
+    log('Memicu render...');
+    const dp=await gh(c,'/actions/workflows/remotion.yml/dispatches',{method:'POST',body:JSON.stringify({ref:c.b,inputs:{id}})});
+    if(dp.status!==204)throw new Error('Dispatch gagal: '+(await dp.text()).slice(0,160));
+    const t0=Date.now();
+    while(Date.now()-t0<30*60*1000){
+      await sleep(10000);
+      const rl=await gh(c,'/releases/tags/render-'+id);
+      if(rl.ok){const rel=await rl.json();return done(c,rel)}
+      const rr=await gh(c,'/actions/workflows/remotion.yml/runs?per_page=1&event=workflow_dispatch');
+      if(rr.ok){const run=(await rr.json()).workflow_runs[0];
+        if(run){
+          if(run.status==='completed'&&run.conclusion!=='success')throw new Error('Render gagal ('+run.conclusion+'). Cek log di: '+run.html_url);
+          log('Status: '+(run.status==='queued'?'antri':'render jalan')+' ('+Math.round((Date.now()-t0)/1000)+' dtk)');
+        }}
+    }
+    throw new Error('Timeout 30 menit');
+  }catch(e){log(e.message,'er');$('bRen').disabled=false}
+}
+
+async function done(c,rel){
+  const a=rel.assets[0];
+  $('outBox').style.display='block';
+  $('lnk').innerHTML='<a href="'+rel.html_url+'" target="_blank">Halaman release</a>';
+  log('Selesai, mengunduh video...','ok');
+  try{
+    const r=await fetch(a.url,{headers:{Authorization:'Bearer '+c.t,Accept:'application/octet-stream'}});
+    if(!r.ok)throw new Error(r.status);
+    const u=URL.createObjectURL(await r.blob());
+    $('vid').src=u;$('lnk').innerHTML+=' &nbsp; <a href="'+u+'" download="remotion.mp4">Simpan mp4</a>';
+    log('Selesai','ok');
+  }catch(e){
+    $('vid').src=a.browser_download_url;
+    $('lnk').innerHTML+=' &nbsp; <a href="'+a.browser_download_url+'" target="_blank">Unduh mp4</a>';
+    log('Selesai. Pemutar langsung gagal ('+e.message+'), pakai link unduh.','ok');
+  }
+  $('bRen').disabled=false;
+}
+loadCfg();
+</script>
+</body>
+</html>
